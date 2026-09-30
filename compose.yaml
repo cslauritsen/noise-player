@@ -1,7 +1,7 @@
 services:
   noise-player:
     build: .
-    image: noise-player:latest
+    image: cslauritsen/noise-player:latest
     platform: linux/arm64
     restart: unless-stopped
     devices:
