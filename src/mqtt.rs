@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use rumqttc::{AsyncClient, Event, EventLoop, LastWill, MqttOptions, Packet, QoS};
+use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
@@ -148,7 +149,9 @@ fn mqtt_options(cfg: &Config, t: &Topics) -> MqttOptions {
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_last_will(LastWill::new(t.availability(), "offline", QoS::AtLeastOnce, true));
     if let Some(user) = &cfg.mqtt.username {
-        opts.set_credentials(user, cfg.mqtt.password.clone().unwrap_or_default());
+        // rumqttc needs a plain String; it only goes into the CONNECT packet.
+        let password = cfg.mqtt.password.as_ref().map(|p| p.expose_secret().to_owned());
+        opts.set_credentials(user, password.unwrap_or_default());
     }
     opts
 }

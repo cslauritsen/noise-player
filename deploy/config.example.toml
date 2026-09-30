@@ -1,17 +1,19 @@
-# /etc/noise-player/config.toml
-instance_id = "bedroom"             # one instance per Pi / room; used in topics and entity ids
-# name = "Bedroom Noise"            # HA device name (default: "Noise Player <instance_id>")
+# /etc/noise-player/config.toml (optional)
+# Every setting shown with a NOISE_PLAYER_* name can instead come from that
+# environment variable, which overrides this file.
+instance_id = "bedroom"             # NOISE_PLAYER_INSTANCE_ID; one instance per Pi / room; used in topics and entity ids
+# name = "Bedroom Noise"            # NOISE_PLAYER_NAME; HA device name (default: "Noise Player <instance_id>")
 
 [mqtt]
-host = "homeassistant.local"
-port = 1883
-username = "noise"
-# password = "..."                  # or set NOISE_PLAYER_MQTT_PASSWORD
+host = "192.168.1.4"                # NOISE_PLAYER_MQTT_HOST; in Docker, .local names may not resolve
+port = 1883                         # NOISE_PLAYER_MQTT_PORT
+username = "noise"                  # NOISE_PLAYER_MQTT_USERNAME
+# password = "..."                  # NOISE_PLAYER_MQTT_PASSWORD (preferred)
 # discovery_prefix = "homeassistant"
 # base_topic = "noise_player"
 
 [audio]
-# device = "USB"                    # name or id from `noise-player devices`; default output if unset
+# device = "USB"                    # NOISE_PLAYER_AUDIO_DEVICE; name or id from `noise-player devices`; default output if unset
 
 [noise]
 # loop_seconds = 60.0

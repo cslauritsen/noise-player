@@ -17,8 +17,6 @@ use rand_chacha::ChaCha8Rng;
 use config::Config;
 use noise::{Color, LoopParams, StereoLoop};
 
-const DEFAULT_CONFIG: &str = "/etc/noise-player/config.toml";
-
 #[derive(Parser)]
 #[command(version, about = "Seamless brown/pink/white noise player")]
 struct Cli {
@@ -30,13 +28,13 @@ struct Cli {
 enum Command {
     /// Run the service: play noise under Home Assistant control via MQTT.
     Run {
-        #[arg(long, default_value = DEFAULT_CONFIG)]
-        config: PathBuf,
+        #[command(flatten)]
+        config: ConfigArg,
     },
     /// Remove this instance from Home Assistant and clear its retained MQTT topics.
     Uninstall {
-        #[arg(long, default_value = DEFAULT_CONFIG)]
-        config: PathBuf,
+        #[command(flatten)]
+        config: ConfigArg,
     },
     /// Write one noise loop to a WAV file.
     Render {
@@ -63,6 +61,20 @@ enum Command {
     },
     /// List audio output devices.
     Devices,
+}
+
+#[derive(Args)]
+struct ConfigArg {
+    /// Config file [default: /etc/noise-player/config.toml, if present].
+    /// NOISE_PLAYER_* environment variables override it.
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
+impl ConfigArg {
+    fn load(&self) -> anyhow::Result<Config> {
+        Config::load(self.config.as_deref())
+    }
 }
 
 #[derive(Args)]
@@ -99,8 +111,8 @@ fn main() -> anyhow::Result<()> {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
     match Cli::parse().command {
-        Command::Run { config } => run(Config::load(&config)?),
-        Command::Uninstall { config } => runtime()?.block_on(mqtt::uninstall(&Config::load(&config)?)),
+        Command::Run { config } => run(config.load()?),
+        Command::Uninstall { config } => runtime()?.block_on(mqtt::uninstall(&config.load()?)),
         Command::Render { color, sample_rate, noise, out } => {
             let started = Instant::now();
             let lp = noise::generate(color, &noise.params(sample_rate), &mut noise.rng());

@@ -140,6 +140,7 @@ prefers 48 kHz); loops are generated to match.
 - `rand` (+ `rand_chacha` for seeded RNG)
 - `rumqttc` + `tokio` — MQTT client
 - `serde` + `toml` — config; `serde_json` — discovery payloads
+- `secrecy` — MQTT password (redacted from `Debug`, zeroed on drop)
 - `clap` — CLI; `tracing` — logging
 - `hound` — WAV export
 
@@ -147,11 +148,16 @@ prefers 48 kHz); loops are generated to match.
 - Target: one Raspberry Pi per room, running Raspberry Pi OS 64-bit (`aarch64`), with a
   USB speaker as the only audio output.
 - Audio goes straight to ALSA; no PulseAudio/PipeWire needed on a headless Pi.
-- Run as a `systemd` service (`Restart=on-failure`, enabled at boot, runs as a dedicated
-  user in the `audio` group); unit file in `deploy/`.
-- Build: cross-compile with `cross` (`aarch64-unknown-linux-gnu`) and `scp` the binary,
-  or build on the Pi. The loop is generated at startup (a few seconds on a Pi); cache it to
-  disk if startup time matters.
+- Runs under Docker Compose (`compose.yaml`) with `restart: unless-stopped` instead of a
+  systemd unit. The container gets `/dev/snd` and runs as a non-root user in `audio`.
+- Settings come from `NOISE_PLAYER_*` variables in `.env`; a mounted `config.toml` is
+  optional and only needed for the less common settings.
+- Build: the multi-stage `Dockerfile` compiles in `rust:1-bookworm` (arm64) and ships a
+  `debian:bookworm-slim` runtime with `libasound2`. Build on the Pi with
+  `docker compose up -d --build`, or on an Apple Silicon Mac (native arm64) and copy the
+  image over with `docker save | ssh pi docker load`.
+  `docker build --target binary --output target/pi .` exports just the binary.
+- The loop is generated at startup (a few seconds on a Pi).
 - The USB speaker may enumerate late at boot or be unplugged; the audio-device retry
   covers both cases.
 

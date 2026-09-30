@@ -1,11 +1,12 @@
 use std::path::Path;
 
 use anyhow::Context;
+use secrecy::SecretString;
 use serde::Deserialize;
 
 use crate::noise::Color;
 
-pub const PASSWORD_ENV: &str = "NOISE_PLAYER_MQTT_PASSWORD";
+pub const DEFAULT_PATH: &str = "/etc/noise-player/config.toml";
 
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -25,7 +26,8 @@ pub struct Mqtt {
     pub host: String,
     pub port: u16,
     pub username: Option<String>,
-    pub password: Option<String>,
+    /// Redacted in `Debug` output and zeroed on drop.
+    pub password: Option<SecretString>,
     pub discovery_prefix: String,
     pub base_topic: String,
 }
@@ -88,14 +90,23 @@ impl Default for Noise {
 }
 
 impl Config {
-    pub fn load(path: &Path) -> anyhow::Result<Config> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading config {}", path.display()))?;
-        let mut cfg: Config =
-            toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
-        if let Ok(pw) = std::env::var(PASSWORD_ENV) {
-            cfg.mqtt.password = Some(pw);
-        }
+    /// Load `path` (or the default path, if it exists), then apply environment
+    /// overrides. With no file at all, settings come from the environment and defaults.
+    pub fn load(path: Option<&Path>) -> anyhow::Result<Config> {
+        let path = path.or_else(|| {
+            let default = Path::new(DEFAULT_PATH);
+            default.exists().then_some(default)
+        });
+        let mut cfg = match path {
+            Some(path) => {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading config {}", path.display()))?;
+                toml::from_str(&text)
+                    .with_context(|| format!("parsing config {}", path.display()))?
+            }
+            None => Config::default(),
+        };
+        cfg.apply_env()?;
         anyhow::ensure!(
             !cfg.instance_id.is_empty()
                 && cfg
@@ -107,9 +118,47 @@ impl Config {
         Ok(cfg)
     }
 
+    fn apply_env(&mut self) -> anyhow::Result<()> {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        if let Some(v) = var("NOISE_PLAYER_INSTANCE_ID") {
+            self.instance_id = v;
+        }
+        if let Some(v) = var("NOISE_PLAYER_NAME") {
+            self.name = Some(v);
+        }
+        if let Some(v) = var("NOISE_PLAYER_MQTT_HOST") {
+            self.mqtt.host = v;
+        }
+        if let Some(v) = var("NOISE_PLAYER_MQTT_PORT") {
+            self.mqtt.port = v.parse().context("NOISE_PLAYER_MQTT_PORT must be a port number")?;
+        }
+        if let Some(v) = var("NOISE_PLAYER_MQTT_USERNAME") {
+            self.mqtt.username = Some(v);
+        }
+        if let Some(v) = var("NOISE_PLAYER_MQTT_PASSWORD") {
+            self.mqtt.password = Some(v.into());
+        }
+        if let Some(v) = var("NOISE_PLAYER_AUDIO_DEVICE") {
+            self.audio.device = Some(v);
+        }
+        Ok(())
+    }
+
     pub fn device_name(&self) -> String {
         self.name
             .clone()
             .unwrap_or_else(|| format!("Noise Player {}", self.instance_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_is_redacted_in_debug_output() {
+        let cfg: Config = toml::from_str("[mqtt]\npassword = \"hunter2\"").unwrap();
+        assert!(cfg.mqtt.password.is_some());
+        assert!(!format!("{cfg:?}").contains("hunter2"));
     }
 }
