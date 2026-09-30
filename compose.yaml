@@ -9,11 +9,16 @@ services:
     # Settings come from NOISE_PLAYER_* variables in .env, e.g.
     #   NOISE_PLAYER_INSTANCE_ID=bedroom
     #   NOISE_PLAYER_MQTT_HOST=192.168.1.4
-    #   NOISE_PLAYER_MQTT_USERNAME / NOISE_PLAYER_MQTT_PASSWORD
+    #   NOISE_PLAYER_MQTT_USERNAME=noise
+    #   NOISE_PLAYER_MQTT_PASSWORD      (overrides the mqtt_password secret below)
     #   NOISE_PLAYER_AUDIO_DEVICE=USB   (see `docker compose run --rm noise-player devices`)
     env_file:
       - path: .env
         required: false
+    # The MQTT password, read from ./secrets/mqtt_password (defined at the bottom).
+    secrets:
+      - source: mqtt_password
+        target: /run/secrets/mqtt_password
     # For the less common settings (loop length, high-pass, sleep fade), mount a
     # config file; see deploy/config.example.toml.
     # volumes:
@@ -24,3 +29,10 @@ services:
       options:
         max-size: 5m
         max-file: "2"
+
+secrets:
+  # One line containing the MQTT password. It's bind-mounted with its host
+  # permissions, so the container user needs read access:
+  #   mkdir -m 700 secrets && (umask 022; printf '%s' '<password>' > secrets/mqtt_password)
+  mqtt_password:
+    file: ./secrets/mqtt_password

@@ -4,3 +4,4 @@ renders/
 .env
 config.toml
 prompts/
+secrets/

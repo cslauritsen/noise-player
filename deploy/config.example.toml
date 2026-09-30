@@ -8,7 +8,7 @@ instance_id = "bedroom"             # NOISE_PLAYER_INSTANCE_ID; one instance per
 host = "192.168.1.4"                # NOISE_PLAYER_MQTT_HOST; in Docker, .local names may not resolve
 port = 1883                         # NOISE_PLAYER_MQTT_PORT
 username = "noise"                  # NOISE_PLAYER_MQTT_USERNAME
-# password = "..."                  # NOISE_PLAYER_MQTT_PASSWORD (preferred)
+# password = "..."                  # overridden by /run/secrets/mqtt_password, then NOISE_PLAYER_MQTT_PASSWORD
 # discovery_prefix = "homeassistant"
 # base_topic = "noise_player"
 

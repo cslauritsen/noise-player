@@ -150,6 +150,8 @@ prefers 48 kHz); loops are generated to match.
 - Audio goes straight to ALSA; no PulseAudio/PipeWire needed on a headless Pi.
 - Runs under Docker Compose (`compose.yaml`) with `restart: unless-stopped` instead of a
   systemd unit. The container gets `/dev/snd` and runs as a non-root user in `audio`.
+- MQTT password precedence: config file < `/run/secrets/mqtt_password` (a Compose secret
+  from `./secrets/mqtt_password`) < `NOISE_PLAYER_MQTT_PASSWORD`.
 - Settings come from `NOISE_PLAYER_*` variables in `.env`; a mounted `config.toml` is
   optional and only needed for the less common settings.
 - Build: the multi-stage `Dockerfile` compiles in `rust:1-bookworm` (arm64) and ships a

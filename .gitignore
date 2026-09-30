@@ -2,3 +2,4 @@
 renders/
 .env
 config.toml
+secrets/

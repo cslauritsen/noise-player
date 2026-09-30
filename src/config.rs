@@ -2,11 +2,14 @@ use std::path::Path;
 
 use anyhow::Context;
 use secrecy::SecretString;
+use secrecy::zeroize::Zeroizing;
 use serde::Deserialize;
 
 use crate::noise::Color;
 
 pub const DEFAULT_PATH: &str = "/etc/noise-player/config.toml";
+/// Where Docker/Compose mounts the `mqtt_password` secret.
+pub const MQTT_PASSWORD_SECRET: &str = "/run/secrets/mqtt_password";
 
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -106,6 +109,10 @@ impl Config {
             }
             None => Config::default(),
         };
+        // Password precedence: config file < secret file < environment.
+        if let Some(pw) = read_secret_file(Path::new(MQTT_PASSWORD_SECRET))? {
+            cfg.mqtt.password = Some(pw);
+        }
         cfg.apply_env()?;
         anyhow::ensure!(
             !cfg.instance_id.is_empty()
@@ -151,6 +158,19 @@ impl Config {
     }
 }
 
+/// Read a secret from a file, ignoring a trailing newline. A missing file is `None`.
+fn read_secret_file(path: &Path) -> anyhow::Result<Option<SecretString>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let text = Zeroizing::new(text);
+            let secret = text.trim_end_matches(['\r', '\n']);
+            Ok((!secret.is_empty()).then(|| secret.into()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading secret {}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +180,16 @@ mod tests {
         let cfg: Config = toml::from_str("[mqtt]\npassword = \"hunter2\"").unwrap();
         assert!(cfg.mqtt.password.is_some());
         assert!(!format!("{cfg:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn secret_file_trims_newline_and_tolerates_missing_file() {
+        use secrecy::ExposeSecret;
+        let path = std::env::temp_dir().join(format!("noise-player-secret-{}", std::process::id()));
+        std::fs::write(&path, "s3cret\n").unwrap();
+        let secret = read_secret_file(&path).unwrap().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(secret.expose_secret(), "s3cret");
+        assert!(read_secret_file(&path).unwrap().is_none());
     }
 }
