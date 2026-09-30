@@ -1,0 +1,21 @@
+# /etc/noise-player/config.toml
+instance_id = "bedroom"             # one instance per Pi / room; used in topics and entity ids
+# name = "Bedroom Noise"            # HA device name (default: "Noise Player <instance_id>")
+
+[mqtt]
+host = "homeassistant.local"
+port = 1883
+username = "noise"
+# password = "..."                  # or set NOISE_PLAYER_MQTT_PASSWORD
+# discovery_prefix = "homeassistant"
+# base_topic = "noise_player"
+
+[audio]
+# device = "USB"                    # name or id from `noise-player devices`; default output if unset
+
+[noise]
+# loop_seconds = 60.0
+# highpass_hz = 20.0
+# default_type = "brown"            # used until the broker delivers a retained value
+# default_volume = 40
+# sleep_fade_seconds = 30.0

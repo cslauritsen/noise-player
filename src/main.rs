@@ -1,3 +1,5 @@
+mod config;
+mod mqtt;
 mod noise;
 mod player;
 
@@ -12,7 +14,10 @@ use clap::{Args, Parser, Subcommand};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
+use config::Config;
 use noise::{Color, LoopParams, StereoLoop};
+
+const DEFAULT_CONFIG: &str = "/etc/noise-player/config.toml";
 
 #[derive(Parser)]
 #[command(version, about = "Seamless brown/pink/white noise player")]
@@ -23,6 +28,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run the service: play noise under Home Assistant control via MQTT.
+    Run {
+        #[arg(long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+    },
+    /// Remove this instance from Home Assistant and clear its retained MQTT topics.
+    Uninstall {
+        #[arg(long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+    },
     /// Write one noise loop to a WAV file.
     Render {
         #[arg(long, value_enum, default_value = "brown")]
@@ -79,7 +94,13 @@ impl NoiseArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
+        .init();
     match Cli::parse().command {
+        Command::Run { config } => run(Config::load(&config)?),
+        Command::Uninstall { config } => runtime()?.block_on(mqtt::uninstall(&Config::load(&config)?)),
         Command::Render { color, sample_rate, noise, out } => {
             let started = Instant::now();
             let lp = noise::generate(color, &noise.params(sample_rate), &mut noise.rng());
@@ -127,11 +148,11 @@ fn play(color: Color, volume: u8, device: Option<String>, noise: NoiseArgs) -> a
     let started = Instant::now();
     let params = noise.params(config.sample_rate);
     let mut rng = noise.rng();
-    let loops: Vec<StereoLoop> = Color::ALL.iter().map(|&c| noise::generate(c, &params, &mut rng)).collect();
+    let loops = player::generate_loops(&params, &mut rng);
     println!("generated loops in {:.2?}", started.elapsed());
 
     let controls = player::Controls::new(color, volume);
-    let _stream = player::start(&device, config, format, Arc::new(loops), controls.clone())?;
+    let _stream = player::start(&device, config, format, loops, controls.clone(), Default::default())?;
     controls.set_playing(true);
 
     println!("commands: w/p/b = white/pink/brown, 0-100 = volume, s = start/stop, q = quit");
@@ -160,6 +181,38 @@ fn play(color: Color, volume: u8, device: Option<String>, noise: NoiseArgs) -> a
     }
 
     // Let the fade-out finish before the stream is dropped.
+    if controls.playing() {
+        controls.set_playing(false);
+        std::thread::sleep(std::time::Duration::from_millis(1600));
+    }
+    Ok(())
+}
+
+fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_current_thread().enable_all().build()?)
+}
+
+fn run(cfg: Config) -> anyhow::Result<()> {
+    tracing::info!("noise-player {} starting as {:?}", env!("CARGO_PKG_VERSION"), cfg.instance_id);
+    // Start stopped with config defaults; retained MQTT commands then restore HA's state.
+    let controls = player::Controls::new(cfg.noise.default_type, cfg.noise.default_volume);
+    let health = Arc::new(player::AudioHealth::default());
+    let params = LoopParams {
+        seconds: cfg.noise.loop_seconds,
+        highpass_hz: cfg.noise.highpass_hz,
+        ..Default::default()
+    };
+    player::spawn_supervisor(
+        cfg.audio.device.clone(),
+        params,
+        ChaCha8Rng::seed_from_u64(rand::random()),
+        controls.clone(),
+        health.clone(),
+    );
+
+    runtime()?.block_on(mqtt::run(cfg, controls.clone(), health))?;
+
+    // Let the fade-out finish before the process exits.
     if controls.playing() {
         controls.set_playing(false);
         std::thread::sleep(std::time::Duration::from_millis(1600));

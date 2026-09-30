@@ -8,7 +8,8 @@ use std::f32::consts::TAU;
 use rand::{Rng, RngExt};
 use realfft::{RealFftPlanner, num_complex::Complex};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Color {
     White,
     Pink,
@@ -24,6 +25,10 @@ impl Color {
 
     pub fn from_index(i: usize) -> Color {
         Self::ALL[i]
+    }
+
+    pub fn from_name(name: &str) -> Option<Color> {
+        Self::ALL.into_iter().find(|c| c.name() == name)
     }
 
     pub fn name(self) -> &'static str {

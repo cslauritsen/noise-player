@@ -47,7 +47,8 @@ All entities are grouped under one HA device (`noise_player_<instance_id>`).
 
 ## Topics
 Base topic: `noise_player/<instance_id>/`
-- `.../<entity>/set` — commands from HA. **Retained** for Playing, Noise type and Volume
+- `.../<entity>/set` — commands from HA (entities: `playing`, `noise_type`, `volume`,
+  `sleep_timer`). **Retained** for Playing, Noise type and Volume
   (discovery config sets `"retain": true`, so HA publishes them retained); not retained for
   Sleep timer, so a reboot never restarts an old timer.
 - `.../<entity>/state` — state published by the player (retained)
@@ -67,6 +68,8 @@ Base topic: `noise_player/<instance_id>/`
   later reboot won't resume playback the timer already stopped.
 - Retained commands are cleared (empty retained payload) by `noise-player uninstall` when
   a Pi is retired, so HA doesn't keep a ghost device.
+- Sleep timer counts down only while playing (set it while stopped and it starts with
+  playback); turning playback off cancels it. The last `sleep_fade_seconds` fade out.
 - Re-publish discovery when HA comes back online (`homeassistant/status` = `online`).
 - Reconnect to the broker with backoff; playback is unaffected by broker outages.
 
@@ -117,34 +120,19 @@ Why not the classic approaches:
 - If the audio device disappears, report `error` status and retry periodically.
 
 # Configuration
-TOML file (path via `--config`, default `/etc/noise-player/config.toml`), with env var
-overrides for secrets:
-
-```toml
-instance_id = "bedroom"   # one instance per Pi / room
-
-[mqtt]
-host = "homeassistant.local"
-port = 1883
-username = "noise"
-# password via NOISE_PLAYER_MQTT_PASSWORD
-
-[audio]
-device = "default"        # or the USB speaker's ALSA name, e.g. "hw:CARD=Speaker"
-sample_rate = 48000       # falls back to the device's native rate if unsupported
-
-[noise]
-loop_seconds = 60
-highpass_hz = 20.0
-default_type = "brown"
-default_volume = 40       # used only when the broker has no retained volume
-```
+TOML file (path via `--config`, default `/etc/noise-player/config.toml`); the MQTT
+password can come from `NOISE_PLAYER_MQTT_PASSWORD`. Annotated example:
+`deploy/config.example.toml`. The sample rate is the output device's default (cpal
+prefers 48 kHz); loops are generated to match.
 
 # CLI
-- `noise-player run` — run the service (default).
-- `noise-player uninstall` — clear this instance's retained discovery and command topics.
-- `noise-player render --type brown --seconds 60 out.wav` — write a loop to WAV for
+- `noise-player run --config <path>` — run the service.
+- `noise-player uninstall --config <path>` — clear this instance's retained discovery,
+  command and state topics (stop the service first).
+- `noise-player render --color brown --seconds 60 out.wav` — write a loop to WAV for
   listening tests.
+- `noise-player play --color brown --volume 40` — play locally, controlled from stdin.
+- `noise-player devices` — list audio outputs (to find the USB speaker's name).
 
 # Tech Stack
 - `cpal` — audio output

@@ -1,20 +1,24 @@
 //! Audio output. The real-time callback reads control changes from atomics and
 //! ramps every level change so nothing clicks.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{Device, ErrorKind, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
+use rand::Rng;
+use tracing::{error, info, warn};
 
-use crate::noise::{Color, StereoLoop};
+use crate::noise::{self, Color, LoopParams, StereoLoop};
 
 const START_STOP_FADE_SECS: f32 = 1.5;
 const CROSSFADE_SECS: f32 = 1.0;
 const VOLUME_SMOOTHING_SECS: f32 = 0.05;
 /// Range of the volume slider: 1 → -50 dB, 100 → 0 dB.
 const VOLUME_RANGE_DB: f32 = 50.0;
+const DEVICE_RETRY: Duration = Duration::from_secs(5);
 
 /// Desired player state, written by the control side, read by the audio thread.
 pub struct Controls {
@@ -23,6 +27,8 @@ pub struct Controls {
     volume: AtomicU8,
     /// Linear gain derived from `volume`, stored as f32 bits.
     gain: AtomicU32,
+    /// Extra 0..1 gain for slow fades (sleep timer), stored as f32 bits.
+    fade: AtomicU32,
 }
 
 impl Controls {
@@ -32,6 +38,7 @@ impl Controls {
             color: AtomicU8::new(color.index() as u8),
             volume: AtomicU8::new(0),
             gain: AtomicU32::new(0),
+            fade: AtomicU32::new(1f32.to_bits()),
         };
         c.set_volume(volume);
         Arc::new(c)
@@ -69,8 +76,13 @@ impl Controls {
         self.gain.store(gain.to_bits(), Ordering::Relaxed);
     }
 
+    pub fn set_fade(&self, fade: f32) {
+        self.fade.store(fade.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    }
+
     fn gain(&self) -> f32 {
         f32::from_bits(self.gain.load(Ordering::Relaxed))
+            * f32::from_bits(self.fade.load(Ordering::Relaxed))
     }
 }
 
@@ -118,6 +130,14 @@ pub fn output_config(device: &Device) -> anyhow::Result<(StreamConfig, SampleFor
     Ok((cfg.config(), cfg.sample_format()))
 }
 
+/// Generate one loop per color, indexed by `Color::index()`.
+pub fn generate_loops(params: &LoopParams, rng: &mut impl Rng) -> Arc<Vec<StereoLoop>> {
+    Arc::new(Color::ALL.iter().map(|&c| noise::generate(c, params, rng)).collect())
+}
+
+/// Set when the output stream hits an unrecoverable error (e.g. device unplugged).
+pub type Failed = Arc<AtomicBool>;
+
 /// Start the output stream. Playback continues until the returned `Stream` is dropped.
 /// `loops` is indexed by `Color::index()` and every loop must be the same length.
 pub fn start(
@@ -126,14 +146,15 @@ pub fn start(
     format: SampleFormat,
     loops: Arc<Vec<StereoLoop>>,
     controls: Arc<Controls>,
+    failed: Failed,
 ) -> anyhow::Result<Stream> {
     let stream = match format {
-        SampleFormat::F32 => build::<f32>(device, config, loops, controls),
-        SampleFormat::I16 => build::<i16>(device, config, loops, controls),
-        SampleFormat::I24 => build::<cpal::I24>(device, config, loops, controls),
-        SampleFormat::I32 => build::<i32>(device, config, loops, controls),
-        SampleFormat::U16 => build::<u16>(device, config, loops, controls),
-        SampleFormat::F64 => build::<f64>(device, config, loops, controls),
+        SampleFormat::F32 => build::<f32>(device, config, loops, controls, failed),
+        SampleFormat::I16 => build::<i16>(device, config, loops, controls, failed),
+        SampleFormat::I24 => build::<cpal::I24>(device, config, loops, controls, failed),
+        SampleFormat::I32 => build::<i32>(device, config, loops, controls, failed),
+        SampleFormat::U16 => build::<u16>(device, config, loops, controls, failed),
+        SampleFormat::F64 => build::<f64>(device, config, loops, controls, failed),
         other => Err(anyhow!("unsupported sample format {other}")),
     }?;
     stream.play()?;
@@ -145,6 +166,7 @@ fn build<T>(
     config: StreamConfig,
     loops: Arc<Vec<StereoLoop>>,
     controls: Arc<Controls>,
+    failed: Failed,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -167,10 +189,85 @@ where
                 }
             }
         },
-        |err| eprintln!("audio stream error: {err}"),
+        move |err| match err.kind() {
+            ErrorKind::Xrun | ErrorKind::RealtimeDenied => warn!("audio: {err}"),
+            _ => {
+                error!("audio stream failed: {err}");
+                failed.store(true, Ordering::Relaxed);
+            }
+        },
         None,
     )?;
     Ok(stream)
+}
+
+/// Why audio output isn't running, if it isn't.
+#[derive(Default)]
+pub struct AudioHealth(Mutex<Option<String>>);
+
+impl AudioHealth {
+    pub fn error(&self) -> Option<String> {
+        self.0.lock().unwrap().clone()
+    }
+
+    fn set(&self, err: Option<String>) {
+        *self.0.lock().unwrap() = err;
+    }
+}
+
+/// Keep an output stream running on a background thread, reopening the device
+/// whenever it is missing or fails (a USB speaker can enumerate late or be unplugged).
+pub fn spawn_supervisor(
+    device_name: Option<String>,
+    mut params: LoopParams,
+    mut rng: impl Rng + Send + 'static,
+    controls: Arc<Controls>,
+    health: Arc<AudioHealth>,
+) {
+    std::thread::spawn(move || {
+        let mut loops: Option<Arc<Vec<StereoLoop>>> = None;
+        loop {
+            let opened = (|| {
+                let device = find_device(device_name.as_deref())?;
+                let (config, format) = output_config(&device)?;
+                if loops.as_ref().is_none_or(|_| params.sample_rate != config.sample_rate) {
+                    let started = Instant::now();
+                    let p = LoopParams { sample_rate: config.sample_rate, ..params };
+                    loops = Some(generate_loops(&p, &mut rng));
+                    params = p;
+                    info!("generated {} Hz loops in {:.2?}", config.sample_rate, started.elapsed());
+                }
+                let failed = Failed::default();
+                let loops = loops.clone().expect("generated above");
+                let stream = start(&device, config, format, loops, controls.clone(), failed.clone())?;
+                info!(
+                    "audio output: {} ({} ch, {} Hz, {format})",
+                    device.description().map(|d| d.name().to_string()).unwrap_or_default(),
+                    config.channels,
+                    config.sample_rate
+                );
+                anyhow::Ok((stream, failed))
+            })();
+            match opened {
+                Ok((stream, failed)) => {
+                    health.set(None);
+                    while !failed.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(500));
+                    }
+                    drop(stream);
+                    health.set(Some("audio stream failed".into()));
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    if health.error().as_deref() != Some(&msg) {
+                        warn!("audio output unavailable, retrying: {msg}");
+                    }
+                    health.set(Some(msg));
+                }
+            }
+            std::thread::sleep(DEVICE_RETRY);
+        }
+    });
 }
 
 /// Per-sample state owned by the audio thread.
