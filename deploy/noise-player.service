@@ -1,0 +1,44 @@
+# systemd unit for running noise-player directly on the Pi (no Docker).
+#
+# Install:
+#   cargo build --release
+#   sudo install -m 755 target/release/noise-player /usr/local/bin/
+#   sudo install -d /etc/noise-player
+#   sudo install -m 644 deploy/config.example.toml /etc/noise-player/config.toml   # then edit it
+#   sudo install -m 600 /dev/null /etc/noise-player/env
+#   echo 'NOISE_PLAYER_MQTT_PASSWORD=<password>' | sudo tee /etc/noise-player/env >/dev/null
+#   sudo install -m 644 deploy/noise-player.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now noise-player
+#
+# Logs: journalctl -u noise-player -f
+
+[Unit]
+Description=Noise player (Home Assistant via MQTT)
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+ExecStart=/usr/local/bin/noise-player run
+# Read by systemd as root, so it can stay mode 600; holds NOISE_PLAYER_* overrides
+# such as the MQTT password. Optional.
+EnvironmentFile=-/etc/noise-player/env
+Restart=on-failure
+RestartSec=5
+
+# Throwaway unprivileged user; the audio group grants access to /dev/snd.
+DynamicUser=yes
+SupplementaryGroups=audio
+
+# Hardening. /dev/snd stays visible (no PrivateDevices) so the USB speaker can
+# come and go; the player reopens it on its own.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
