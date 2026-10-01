@@ -106,6 +106,7 @@ impl NoiseArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
         .with_target(false)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
