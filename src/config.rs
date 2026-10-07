@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use secrecy::SecretString;
@@ -21,6 +21,7 @@ pub struct Config {
     pub mqtt: Mqtt,
     pub audio: Audio,
     pub noise: Noise,
+    pub button: Button,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +41,19 @@ pub struct Mqtt {
 pub struct Audio {
     /// Output device name or id; the system default when unset.
     pub device: Option<String>,
+}
+
+/// Optional momentary push button that toggles playback.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Button {
+    /// GPIO line offset (BCM number on a Pi). The button is disabled when unset.
+    pub gpio: Option<u32>,
+    /// GPIO character device. The 40-pin header is `/dev/gpiochip0` on a Pi 4 and
+    /// earlier (and on recent Pi 5 kernels); older Pi 5 kernels use `/dev/gpiochip4`.
+    pub chip: PathBuf,
+    /// Ignore edges closer together than this.
+    pub debounce_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +77,7 @@ impl Default for Config {
             mqtt: Mqtt::default(),
             audio: Audio::default(),
             noise: Noise::default(),
+            button: Button::default(),
         }
     }
 }
@@ -77,6 +92,12 @@ impl Default for Mqtt {
             discovery_prefix: "homeassistant".into(),
             base_topic: "noise_player".into(),
         }
+    }
+}
+
+impl Default for Button {
+    fn default() -> Self {
+        Button { gpio: None, chip: "/dev/gpiochip0".into(), debounce_ms: 50 }
     }
 }
 
@@ -147,6 +168,12 @@ impl Config {
         }
         if let Some(v) = var("NOISE_PLAYER_AUDIO_DEVICE") {
             self.audio.device = Some(v);
+        }
+        if let Some(v) = var("NOISE_PLAYER_BUTTON_GPIO") {
+            self.button.gpio = Some(v.parse().context("NOISE_PLAYER_BUTTON_GPIO must be a GPIO number")?);
+        }
+        if let Some(v) = var("NOISE_PLAYER_BUTTON_CHIP") {
+            self.button.chip = v.into();
         }
         Ok(())
     }

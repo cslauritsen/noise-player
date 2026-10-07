@@ -25,9 +25,10 @@ EnvironmentFile=-/etc/noise-player/env
 Restart=on-failure
 RestartSec=5
 
-# Throwaway unprivileged user; the audio group grants access to /dev/snd.
+# Throwaway unprivileged user; the audio group grants access to /dev/snd and
+# gpio to /dev/gpiochip* (only needed for the push button).
 DynamicUser=yes
-SupplementaryGroups=audio
+SupplementaryGroups=audio gpio
 
 # Hardening. /dev/snd stays visible (no PrivateDevices) so the USB speaker can
 # come and go; the player reopens it on its own.

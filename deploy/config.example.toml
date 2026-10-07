@@ -15,6 +15,13 @@ username = "noise"                  # NOISE_PLAYER_MQTT_USERNAME
 [audio]
 # device = "USB"                    # NOISE_PLAYER_AUDIO_DEVICE; name or id from `noise-player devices`; default output if unset
 
+[button]
+# Momentary push button between a GPIO pin and ground (internal pull-up); toggles playback
+# and updates the Home Assistant switch. Disabled unless gpio is set.
+# gpio = 17                         # NOISE_PLAYER_BUTTON_GPIO; BCM number (17 = physical pin 11; ground is pin 9)
+# chip = "/dev/gpiochip0"           # NOISE_PLAYER_BUTTON_CHIP
+# debounce_ms = 50
+
 [noise]
 # loop_seconds = 60.0
 # highpass_hz = 20.0

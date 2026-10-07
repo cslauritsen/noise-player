@@ -334,6 +334,23 @@ impl Service {
         }
     }
 
+    /// Physical button: toggle playback, then update the retained command topic
+    /// (as HA would) so HA's switch and a restarted player both follow.
+    async fn on_button(&mut self) -> anyhow::Result<()> {
+        let payload = if self.controls.playing() {
+            self.stop_playing();
+            "OFF"
+        } else {
+            self.start_playing();
+            "ON"
+        };
+        info!("button pressed; playing {payload}");
+        self.client
+            .publish(self.topics.set("playing"), QoS::AtLeastOnce, true, payload)
+            .await?;
+        self.publish_state_if_changed().await
+    }
+
     async fn tick(&mut self) -> anyhow::Result<()> {
         if let Some(remaining) = self.timer.remaining(Instant::now()) {
             let fade_secs = self.cfg.noise.sleep_fade_seconds.max(0.1);
@@ -384,12 +401,19 @@ pub async fn run(cfg: Config, controls: Arc<Controls>, health: Arc<AudioHealth>)
         last_published: None,
     };
 
+    let mut button = crate::button::spawn(&svc.cfg.button);
     let mut ticker = tokio::time::interval(TICK);
     let mut shutdown = std::pin::pin!(shutdown_signal());
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
             _ = ticker.tick() => svc.tick().await?,
+            Some(()) = async {
+                match button.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => svc.on_button().await?,
             ev = eventloop.poll() => match ev {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => svc.on_connected().await?,
                 Ok(Event::Incoming(Packet::Publish(p))) => svc.on_message(&p.topic, &p.payload).await?,
