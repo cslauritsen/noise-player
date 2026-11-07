@@ -3,6 +3,7 @@ mod config;
 mod mqtt;
 mod noise;
 mod player;
+mod temperature;
 
 use std::io::BufRead;
 use std::path::PathBuf;

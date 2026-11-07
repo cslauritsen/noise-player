@@ -22,6 +22,7 @@ pub struct Config {
     pub audio: Audio,
     pub noise: Noise,
     pub button: Button,
+    pub temperature: Temperature,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +57,19 @@ pub struct Button {
     pub debounce_ms: u64,
 }
 
+/// Optional DS18B20 1-Wire thermometer, published to HA as a temperature sensor.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Temperature {
+    pub enabled: bool,
+    /// Seconds between readings.
+    pub interval_seconds: f32,
+    /// Sensor id such as "28-0123456789ab"; the first thermometer found if unset.
+    pub sensor: Option<String>,
+    /// Where the kernel lists 1-Wire devices.
+    pub devices_dir: PathBuf,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Noise {
@@ -78,6 +92,7 @@ impl Default for Config {
             audio: Audio::default(),
             noise: Noise::default(),
             button: Button::default(),
+            temperature: Temperature::default(),
         }
     }
 }
@@ -98,6 +113,17 @@ impl Default for Mqtt {
 impl Default for Button {
     fn default() -> Self {
         Button { gpio: None, chip: "/dev/gpiochip0".into(), debounce_ms: 50 }
+    }
+}
+
+impl Default for Temperature {
+    fn default() -> Self {
+        Temperature {
+            enabled: false,
+            interval_seconds: 30.0,
+            sensor: None,
+            devices_dir: "/sys/bus/w1/devices".into(),
+        }
     }
 }
 
@@ -174,6 +200,12 @@ impl Config {
         }
         if let Some(v) = var("NOISE_PLAYER_BUTTON_CHIP") {
             self.button.chip = v.into();
+        }
+        if let Some(v) = var("NOISE_PLAYER_TEMPERATURE_ENABLED") {
+            self.temperature.enabled = matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        }
+        if let Some(v) = var("NOISE_PLAYER_TEMPERATURE_SENSOR") {
+            self.temperature.sensor = Some(v);
         }
         Ok(())
     }

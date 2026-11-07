@@ -22,6 +22,14 @@ username = "noise"                  # NOISE_PLAYER_MQTT_USERNAME
 # chip = "/dev/gpiochip0"           # NOISE_PLAYER_BUTTON_CHIP
 # debounce_ms = 50
 
+[temperature]
+# DS18B20 on the 1-Wire bus: needs `dtoverlay=w1-gpio,gpiopin=4` in /boot/firmware/config.txt
+# and a 4.7k pull-up between DQ (data) and 3.3V. Wire VDD to 3.3V, GND to ground, DQ to GPIO 4.
+# Shows up in Home Assistant as a "Temperature" sensor on this device.
+# enabled = false                   # NOISE_PLAYER_TEMPERATURE_ENABLED
+# interval_seconds = 30.0
+# sensor = "28-0123456789ab"        # NOISE_PLAYER_TEMPERATURE_SENSOR; first one found if unset (see /sys/bus/w1/devices)
+
 [noise]
 # loop_seconds = 60.0
 # highpass_hz = 20.0
