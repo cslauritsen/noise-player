@@ -15,6 +15,7 @@ services:
     #   NOISE_PLAYER_MQTT_USERNAME=noise
     #   NOISE_PLAYER_MQTT_PASSWORD      (overrides the mqtt_password secret below)
     #   NOISE_PLAYER_BUTTON_GPIO=17     (optional push button to ground; see deploy/config.example.toml)
+    #   NOISE_PLAYER_TEMPERATURE_ENABLED=true   (DS18B20; see deploy/config.example.toml)
     #   NOISE_PLAYER_AUDIO_DEVICE=USB   (see `docker compose run --rm noise-player devices`)
     # group_add:
     #   - "994"   # host gpio GID

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use tokio::sync::watch;
 use rumqttc::{AsyncClient, Event, EventLoop, LastWill, MqttOptions, Packet, QoS};
 use secrecy::ExposeSecret;
 use serde_json::{Value, json};
@@ -15,6 +16,7 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::noise::Color;
+use crate::temperature;
 use crate::player::{AudioHealth, Controls};
 
 const TICK: Duration = Duration::from_millis(250);
@@ -62,13 +64,14 @@ impl Topics {
 }
 
 /// (component, entity) for every discovered entity.
-const ENTITIES: [(&str, &str); 6] = [
+const ENTITIES: [(&str, &str); 7] = [
     ("switch", "playing"),
     ("select", "noise_type"),
     ("number", "volume"),
     ("number", "sleep_timer"),
     ("sensor", "timer_remaining"),
     ("sensor", "status"),
+    ("sensor", "temperature"),
 ];
 /// Entities HA sends commands to. Subscribed in this order so retained type and
 /// volume land before a retained `playing = ON` starts playback.
@@ -132,6 +135,12 @@ fn discovery_configs(cfg: &Config, t: &Topics) -> Vec<(String, Value)> {
             "json_attributes_topic": t.attributes(),
             "icon": "mdi:information-outline",
         })),
+        with(common("temperature", "Temperature"), json!({
+            "device_class": "temperature",
+            "state_class": "measurement",
+            "unit_of_measurement": "°C",
+            "suggested_display_precision": 1,
+        })),
     ];
     ENTITIES
         .iter()
@@ -184,6 +193,8 @@ struct Snapshot {
     sleep_minutes: u32,
     remaining: u32,
     error: Option<String>,
+    /// Tenths of °C.
+    temperature: Option<i32>,
 }
 
 struct Service {
@@ -192,6 +203,7 @@ struct Service {
     client: AsyncClient,
     controls: Arc<Controls>,
     health: Arc<AudioHealth>,
+    temperature: Option<watch::Receiver<temperature::Reading>>,
     timer: SleepTimer,
     last_published: Option<Snapshot>,
 }
@@ -205,6 +217,7 @@ impl Service {
             sleep_minutes: self.timer.minutes,
             remaining: self.timer.remaining_minutes(now),
             error: self.health.error(),
+            temperature: self.temperature.as_ref().and_then(|rx| *rx.borrow()),
         }
     }
 
@@ -222,9 +235,13 @@ impl Service {
 
     async fn publish_discovery(&self) -> anyhow::Result<()> {
         for (topic, config) in discovery_configs(&self.cfg, &self.topics) {
-            self.client
-                .publish(topic, QoS::AtLeastOnce, true, config.to_string())
-                .await?;
+            // An empty config removes the entity, e.g. after the sensor is disabled.
+            let payload = if topic.ends_with("/temperature/config") && self.temperature.is_none() {
+                String::new()
+            } else {
+                config.to_string()
+            };
+            self.client.publish(topic, QoS::AtLeastOnce, true, payload).await?;
         }
         self.client
             .publish(self.topics.availability(), QoS::AtLeastOnce, true, "online")
@@ -251,7 +268,11 @@ impl Service {
             ("timer_remaining", s.remaining.to_string()),
             ("status", status.to_string()),
         ];
-        for (entity, payload) in states {
+        let temperature = self.temperature.as_ref().map(|_| {
+            // "None" makes HA show the sensor as unavailable/unknown.
+            s.temperature.map_or("None".to_string(), |t| format!("{:.1}", t as f32 / 10.0))
+        });
+        for (entity, payload) in states.into_iter().chain(temperature.map(|p| ("temperature", p))) {
             self.client.publish(t.state(entity), QoS::AtLeastOnce, true, payload).await?;
         }
         let attrs = json!({ "error": s.error });
@@ -391,12 +412,14 @@ fn minutes(m: u32) -> Duration {
 pub async fn run(cfg: Config, controls: Arc<Controls>, health: Arc<AudioHealth>) -> anyhow::Result<()> {
     let topics = Topics::new(&cfg);
     let (client, mut eventloop) = AsyncClient::new(mqtt_options(&cfg, &topics), 64);
+    let temperature = temperature::spawn(&cfg.temperature);
     let mut svc = Service {
         cfg,
         topics,
         client,
         controls,
         health,
+        temperature,
         timer: SleepTimer::default(),
         last_published: None,
     };
