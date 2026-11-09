@@ -1,3 +1,4 @@
+mod button;
 mod config;
 mod mqtt;
 mod noise;
